@@ -22,8 +22,7 @@ Copy the desired YAML file into your Home Assistant config directory under the m
 config/
 └── blueprints/
     └── automation/
-        └── blaugrau90/
-            └── window-open-climate-restore-mode.yaml
+        └── window-open-climate-restore-mode.yaml
 ```
 
 Then reload blueprints in Home Assistant: **Settings → Automations → Blueprints → Reload**.
