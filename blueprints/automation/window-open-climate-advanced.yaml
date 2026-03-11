@@ -1,9 +1,11 @@
 blueprint:
-  name: "Window Open – Climate Off (Selectable Restore Mode)"
+  name: "Window Open – Climate Off (Advanced Mode & Temperature Control)"
   description: >
     Turns off a climate device (heating/cooling) when a window opens,
     and controls it again after the window closes.
-    You can choose whether to restore the previous state or switch to HVAC mode "auto".
+    Choose to restore the previous state, or set a specific HVAC mode.
+    When setting a specific mode (not "auto"), you can also control
+    the target temperature: restore the saved value, set a fixed one, or leave it unchanged.
   domain: automation
   source_url: https://github.com/blaugrau90/home-assistant
   input:
@@ -51,17 +53,65 @@ blueprint:
     restore_mode:
       name: Behavior When Window Closes
       description: >
-        What should the climate device do when the window is closed again?
-        "Restore previous state" restores the HVAC mode and temperature from before the window opened.
-        "Switch to auto" sets the climate device to HVAC mode "auto".
+        What should the climate device do when the window closes?
+        "Restore previous state" restores the exact HVAC mode, temperature and preset from before opening.
+        "Set specific mode" lets you define which mode and temperature to apply.
       default: restore_previous
       selector:
         select:
           options:
             - label: "Restore previous state"
               value: restore_previous
-            - label: "Switch to auto (HVAC mode: auto)"
-              value: set_auto
+            - label: "Set specific mode"
+              value: set_mode
+
+    target_hvac_mode:
+      name: Target HVAC Mode
+      description: >
+        Only applies when "Set specific mode" is selected above.
+        The HVAC mode to set when the window closes.
+        For "auto", no temperature will be changed regardless of the setting below.
+      default: heat
+      selector:
+        select:
+          options:
+            - label: "Heat"
+              value: heat
+            - label: "Cool"
+              value: cool
+            - label: "Heat / Cool (heat_cool)"
+              value: heat_cool
+            - label: "Auto"
+              value: auto
+
+    temperature_behavior:
+      name: Temperature Behavior
+      description: >
+        Only applies when "Set specific mode" is selected and the mode is not "auto".
+        Choose how to handle the temperature when the window closes.
+      default: restore_saved
+      selector:
+        select:
+          options:
+            - label: "Restore saved temperature (from before opening)"
+              value: restore_saved
+            - label: "Set a specific temperature"
+              value: set_specific
+            - label: "Do not change temperature"
+              value: none
+
+    target_temperature:
+      name: Target Temperature
+      description: >
+        Only applies when "Set a specific temperature" is selected above.
+      default: 20
+      selector:
+        number:
+          min: 5
+          max: 35
+          unit_of_measurement: "°C"
+          mode: slider
+          step: 0.5
 
     open_action:
       name: Additional Action on Open (Optional)
@@ -87,6 +137,9 @@ trigger:
 variables:
   climate_entity: !input climate_target
   restore_mode: !input restore_mode
+  target_hvac_mode: !input target_hvac_mode
+  temperature_behavior: !input temperature_behavior
+  target_temperature: !input target_temperature
   saved_hvac_mode: "{{ states(climate_entity) }}"
   saved_temperature: "{{ state_attr(climate_entity, 'temperature') }}"
   saved_preset_mode: "{{ state_attr(climate_entity, 'preset_mode') }}"
@@ -133,17 +186,16 @@ action:
 
   # Control climate device based on user choice
   - choose:
+      # --- Option 1: Restore previous state ---
       - conditions:
           - condition: template
             value_template: "{{ restore_mode == 'restore_previous' }}"
         sequence:
-          # Restore previous HVAC mode
           - action: climate.set_hvac_mode
             target:
               entity_id: !input climate_target
             data:
               hvac_mode: "{{ saved_hvac_mode }}"
-          # Restore previous temperature (if saved)
           - if:
               - condition: template
                 value_template: "{{ saved_temperature is not none }}"
@@ -153,7 +205,6 @@ action:
                   entity_id: !input climate_target
                 data:
                   temperature: "{{ saved_temperature }}"
-          # Restore previous preset (if saved)
           - if:
               - condition: template
                 value_template: "{{ saved_preset_mode is not none }}"
@@ -163,10 +214,42 @@ action:
                   entity_id: !input climate_target
                 data:
                   preset_mode: "{{ saved_preset_mode }}"
-    default:
-      # Switch to HVAC mode "auto"
-      - action: climate.set_hvac_mode
-        target:
-          entity_id: !input climate_target
-        data:
-          hvac_mode: auto
+
+      # --- Option 2: Set specific HVAC mode ---
+      - conditions:
+          - condition: template
+            value_template: "{{ restore_mode == 'set_mode' }}"
+        sequence:
+          # Set chosen HVAC mode
+          - action: climate.set_hvac_mode
+            target:
+              entity_id: !input climate_target
+            data:
+              hvac_mode: "{{ target_hvac_mode }}"
+          # Handle temperature only if mode is not "auto"
+          - if:
+              - condition: template
+                value_template: "{{ target_hvac_mode != 'auto' }}"
+            then:
+              - choose:
+                  # Restore saved temperature
+                  - conditions:
+                      - condition: template
+                        value_template: "{{ temperature_behavior == 'restore_saved' and saved_temperature is not none }}"
+                    sequence:
+                      - action: climate.set_temperature
+                        target:
+                          entity_id: !input climate_target
+                        data:
+                          temperature: "{{ saved_temperature }}"
+                  # Set a specific temperature
+                  - conditions:
+                      - condition: template
+                        value_template: "{{ temperature_behavior == 'set_specific' }}"
+                    sequence:
+                      - action: climate.set_temperature
+                        target:
+                          entity_id: !input climate_target
+                        data:
+                          temperature: "{{ target_temperature }}"
+                # temperature_behavior == "none": do nothing
