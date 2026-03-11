@@ -1,0 +1,173 @@
+blueprint:
+  name: "Fenster offen – Heizung aus (mit wählbarem Rückgabe-Modus)"
+  description: >
+    Schaltet ein Klimagerät (Heizung/Kühlung) ab, wenn ein Fenster geöffnet wird,
+    und steuert es nach dem Schließen wieder an.
+    Du kannst wählen, ob der vorherige Zustand wiederhergestellt oder die Heizung
+    auf den HVAC-Modus "auto" gesetzt werden soll.
+  domain: automation
+  source_url: https://github.com/blaugrau90/ha-blueprints
+  input:
+    window_entity:
+      name: Fenstersensor
+      description: >
+        Der Fenstersensor, der das Klimagerät steuert.
+        Bei mehreren Fenstern bitte eine Sensorgruppe anlegen.
+      selector:
+        entity:
+          domain: binary_sensor
+          device_class: window
+
+    climate_target:
+      name: Klimagerät
+      description: Das Klimagerät (Heizung/Kühlung), das gesteuert werden soll.
+      selector:
+        entity:
+          domain: climate
+
+    minimum_open_time:
+      name: Mindestöffnungszeit
+      description: Wartezeit in Sekunden nach dem Öffnen, bevor die Heizung abschaltet.
+      default: 12
+      selector:
+        number:
+          min: 0
+          max: 120
+          unit_of_measurement: seconds
+          mode: slider
+          step: 1
+
+    minimum_close_time:
+      name: Mindestschließzeit
+      description: Wartezeit in Sekunden nach dem Schließen, bevor die Heizung wieder angeht.
+      default: 12
+      selector:
+        number:
+          min: 0
+          max: 300
+          unit_of_measurement: seconds
+          mode: slider
+          step: 1
+
+    restore_mode:
+      name: Verhalten beim Schließen des Fensters
+      description: >
+        Was soll die Heizung tun, wenn das Fenster wieder geschlossen wird?
+        "Vorherigen Zustand" stellt den Modus und die Temperatur von vor dem Öffnen wieder her.
+        "Auf Auto schalten" setzt die Heizung auf den HVAC-Modus "auto".
+      default: restore_previous
+      selector:
+        select:
+          options:
+            - label: "Vorherigen Zustand wiederherstellen"
+              value: restore_previous
+            - label: "Auf Auto schalten (HVAC-Modus: auto)"
+              value: set_auto
+
+    open_action:
+      name: Zusätzliche Aktion beim Öffnen (Optional)
+      description: Aktion, die ausgeführt wird, wenn das Fenster geöffnet wird (z. B. TTS-Ansage).
+      default: []
+      selector:
+        action: {}
+
+    close_action:
+      name: Zusätzliche Aktion beim Schließen (Optional)
+      description: Aktion, die ausgeführt wird, wenn das Fenster wieder geschlossen wird.
+      default: []
+      selector:
+        action: {}
+
+mode: restart
+
+trigger:
+  - platform: state
+    entity_id: !input window_entity
+    to: "on"
+
+variables:
+  climate_entity: !input climate_target
+  restore_mode: !input restore_mode
+  saved_hvac_mode: "{{ states(climate_entity) }}"
+  saved_temperature: "{{ state_attr(climate_entity, 'temperature') }}"
+  saved_preset_mode: "{{ state_attr(climate_entity, 'preset_mode') }}"
+
+condition:
+  - condition: not
+    conditions:
+      - condition: state
+        entity_id: !input climate_target
+        state: "off"
+
+action:
+  # Warte die Mindestöffnungszeit ab
+  - delay:
+      seconds: !input minimum_open_time
+
+  # Prüfe, ob das Fenster noch offen ist
+  - condition: state
+    entity_id: !input window_entity
+    state: "on"
+
+  # Heizung ausschalten
+  - action: climate.turn_off
+    target:
+      entity_id: !input climate_target
+
+  # Optionale Aktion beim Öffnen
+  - choose: []
+    default: !input open_action
+
+  # Warte bis das Fenster wieder geschlossen wird
+  - wait_for_trigger:
+      - platform: state
+        entity_id: !input window_entity
+        to: "off"
+
+  # Warte die Mindestschließzeit ab
+  - delay:
+      seconds: !input minimum_close_time
+
+  # Optionale Aktion beim Schließen
+  - choose: []
+    default: !input close_action
+
+  # Heizung nach Wahl des Nutzers wieder ansteuern
+  - choose:
+      - conditions:
+          - condition: template
+            value_template: "{{ restore_mode == 'restore_previous' }}"
+        sequence:
+          # Vorherigen HVAC-Modus wiederherstellen
+          - action: climate.set_hvac_mode
+            target:
+              entity_id: !input climate_target
+            data:
+              hvac_mode: "{{ saved_hvac_mode }}"
+          # Vorherige Temperatur wiederherstellen (wenn gespeichert)
+          - if:
+              - condition: template
+                value_template: "{{ saved_temperature is not none }}"
+            then:
+              - action: climate.set_temperature
+                target:
+                  entity_id: !input climate_target
+                data:
+                  temperature: "{{ saved_temperature }}"
+          # Vorherigen Preset wiederherstellen (wenn gespeichert)
+          - if:
+              - condition: template
+                value_template: "{{ saved_preset_mode is not none }}"
+            then:
+              - action: climate.set_preset_mode
+                target:
+                  entity_id: !input climate_target
+                data:
+                  preset_mode: "{{ saved_preset_mode }}"
+    default:
+      # Auf HVAC-Modus "auto" schalten
+      - action: climate.set_hvac_mode
+        target:
+          entity_id: !input climate_target
+        data:
+          hvac_mode: auto
