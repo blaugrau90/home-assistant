@@ -1,0 +1,210 @@
+blueprint:
+  name: "Heating Control – Away & Coming Home (Zone)"
+  description: >
+    Controls all heating devices (climate entities) based on the number of people in a zone.
+
+    Away Mode  (zone.home = 0): All heaters switch to the Away preset.
+    Home Mode  (zone.home > 0): All heaters switch to the Home preset.
+
+    Window logic: If a window sensor assigned to a heater is open (state = "on")
+    when the automation triggers, that heater is skipped – the window contact
+    takes over control. Heaters without an assigned window sensor always respond normally.
+
+    Requirements: Home Assistant 2023.4+ (repeat.for_each)
+  domain: automation
+  source_url: https://github.com/blaugrau90/home-assistant
+  input:
+
+    # -------------------------------------------------------------------------
+    # Heating entities
+    # -------------------------------------------------------------------------
+    climate_entities:
+      name: Heating Devices
+      description: >
+        All climate entities to be controlled. Multiple selection is supported.
+      selector:
+        entity:
+          domain: climate
+          multiple: true
+
+    window_sensors:
+      name: Window Sensor Assignments (optional)
+      description: >
+        Optional assignment of heaters to window sensors. If the window is open
+        when the automation triggers, the corresponding heater is skipped.
+        Heaters without an entry always respond normally.
+
+        Format – YAML list of pairs:
+          - climate: climate.living_room
+            window_sensor: binary_sensor.window_living_room
+          - climate: climate.bedroom
+            window_sensor: binary_sensor.window_bedroom
+      default: []
+      selector:
+        object: {}
+
+    # -------------------------------------------------------------------------
+    # Presets
+    # -------------------------------------------------------------------------
+    away_preset:
+      name: Away Preset
+      description: >
+        Preset name for Away Mode. Must be supported by the thermostat.
+        Typical values: "away". Check the available presets of your device.
+      default: "away"
+      selector:
+        text: {}
+
+    home_preset:
+      name: Home Preset (Coming Home)
+      description: >
+        Preset name for Home Mode. Must be supported by the thermostat.
+        Typical values: "home", "auto", or "comfort".
+      default: "home"
+      selector:
+        text: {}
+
+# ---------------------------------------------------------------------------
+# Automation mode: restart – latest trigger wins
+# ---------------------------------------------------------------------------
+mode: restart
+
+# ---------------------------------------------------------------------------
+# Trigger: state change of zone.home (number of people changes)
+# ---------------------------------------------------------------------------
+trigger:
+  - platform: state
+    entity_id: zone.home
+
+# ---------------------------------------------------------------------------
+# Variables
+# ---------------------------------------------------------------------------
+variables:
+  climate_list: !input climate_entities
+  window_sensors_list: !input window_sensors
+  away_preset_name: !input away_preset
+  home_preset_name: !input home_preset
+
+  # Number of people in the zone after the state change (as integer)
+  persons_home: "{{ trigger.to_state.state | int(0) }}"
+
+# ---------------------------------------------------------------------------
+# Actions
+# ---------------------------------------------------------------------------
+action:
+  - choose:
+
+      # =======================================================================
+      # AWAY MODE – nobody home (zone.home = 0)
+      # =======================================================================
+      - conditions:
+          - condition: template
+            value_template: "{{ persons_home == 0 }}"
+        sequence:
+          - repeat:
+              for_each: "{{ climate_list }}"
+              sequence:
+                - variables:
+                    current_climate: "{{ repeat.item }}"
+
+                    # Look up the assigned window sensor (empty if not configured)
+                    matched_window_sensor: >
+                      {% set ns = namespace(sensor='') %}
+                      {% for pair in window_sensors_list %}
+                        {% if pair.climate == current_climate %}
+                          {% set ns.sensor = pair.window_sensor %}
+                        {% endif %}
+                      {% endfor %}
+                      {{ ns.sensor }}
+
+                    # Is the window open? False if no sensor is assigned.
+                    window_is_open: >
+                      {% if matched_window_sensor != '' %}
+                        {{ is_state(matched_window_sensor, 'on') }}
+                      {% else %}
+                        false
+                      {% endif %}
+
+                # Only control if window is closed (or no sensor assigned)
+                - if:
+                    - condition: template
+                      value_template: "{{ not window_is_open }}"
+                  then:
+                    - action: climate.set_preset_mode
+                      target:
+                        entity_id: "{{ current_climate }}"
+                      data:
+                        preset_mode: "{{ away_preset_name }}"
+
+      # =======================================================================
+      # HOME MODE – at least one person home (zone.home > 0)
+      # =======================================================================
+      - conditions:
+          - condition: template
+            value_template: "{{ persons_home > 0 }}"
+        sequence:
+          - repeat:
+              for_each: "{{ climate_list }}"
+              sequence:
+                - variables:
+                    current_climate: "{{ repeat.item }}"
+
+                    matched_window_sensor: >
+                      {% set ns = namespace(sensor='') %}
+                      {% for pair in window_sensors_list %}
+                        {% if pair.climate == current_climate %}
+                          {% set ns.sensor = pair.window_sensor %}
+                        {% endif %}
+                      {% endfor %}
+                      {{ ns.sensor }}
+
+                    window_is_open: >
+                      {% if matched_window_sensor != '' %}
+                        {{ is_state(matched_window_sensor, 'on') }}
+                      {% else %}
+                        false
+                      {% endif %}
+
+                - if:
+                    - condition: template
+                      value_template: "{{ not window_is_open }}"
+                  then:
+                    - action: climate.set_preset_mode
+                      target:
+                        entity_id: "{{ current_climate }}"
+                      data:
+                        preset_mode: "{{ home_preset_name }}"
+
+# ===========================================================================
+# CONFIGURATION EXAMPLE with real entity IDs (as of 2026-03-29)
+#
+# NOTE: preset_modes of the thermostats in this instance: ["away", "home"]
+#
+# automation:
+#   alias: "Heating Control – Presence"
+#   use_blueprint:
+#     path: heizung_presence.yaml
+#     input:
+#       climate_entities:
+#         - climate.wohnzimmer
+#         - climate.bad
+#         - climate.kuche
+#         - climate.buro_luca_leon
+#         - climate.buro_anna_lena
+#         - climate.schlafzimmer
+#       away_preset: "away"
+#       home_preset: "home"
+#       window_sensors:
+#         - climate: climate.wohnzimmer
+#           window_sensor: binary_sensor.aqara_fenster_wohnzimmer_contact
+#         - climate: climate.bad
+#           window_sensor: binary_sensor.aqara_fenster_bad_contact
+#         - climate: climate.kuche
+#           window_sensor: binary_sensor.aqara_fenster_kuche_contact
+#         - climate: climate.buro_luca_leon
+#           window_sensor: binary_sensor.aqara_fenster_luca_leon_buro_contact
+#         - climate: climate.buro_anna_lena
+#           window_sensor: binary_sensor.aqara_fenster_anna_lena_buro_contact
+#         - climate: climate.schlafzimmer
+#           window_sensor: binary_sensor.aqara_fenster_schlafzimmer_contact
+# ===========================================================================
