@@ -1,16 +1,22 @@
 blueprint:
   name: "Heating Control – Away & Coming Home (Zone)"
   description: >
-    Controls all heating devices (climate entities) based on the number of people in a zone.
+    🏠 Controls all heating devices (climate entities) based on the number of people at home.
 
-    Away Mode  (zone.home = 0): All heaters switch to the Away preset.
-    Home Mode  (zone.home > 0): All heaters switch to the Home preset.
 
-    Window logic: If a window sensor assigned to a heater is open (state = "on")
-    when the automation triggers, that heater is skipped – the window contact
-    takes over control. Heaters without an assigned window sensor always respond normally.
+    🌡️ How it works:
 
-    Requirements: Home Assistant 2023.4+ (repeat.for_each)
+    ❄️ Away Mode (zone.home = 0) — When the last person leaves, all heaters switch to the configured Away preset.
+
+    🔥 Home Mode (zone.home > 0) — As soon as someone returns, all heaters switch back to the Home preset.
+
+
+    🪟 Window Logic (optional):
+
+    Each heater can be assigned a window contact sensor. If the window is open when the automation triggers, that heater is skipped — the window takes over control. Heaters without an assigned sensor always respond normally.
+
+
+    ⚙️ Requirements: Home Assistant 2023.4+
   domain: automation
   source_url: https://github.com/blaugrau90/home-assistant
   input:
