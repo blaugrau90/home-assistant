@@ -1,0 +1,76 @@
+blueprint:
+  name: "Heating – Away & Home (Zone)"
+  description: >
+    🏠 Switches your heating between Away and Home mode based on who is at home.
+
+
+    🌡️ How it works:
+
+    ❄️ Away Mode (zone.home = 0) — When the last person leaves, the heating switches to the Away preset.
+
+    🔥 Home Mode (zone.home > 0) — As soon as someone returns, the heating switches back to the Home preset.
+
+
+    💡 Tip: On systems like Tado, setting one thermostat is enough — all others follow automatically.
+  domain: automation
+  source_url: https://github.com/blaugrau90/home-assistant
+  input:
+
+    climate_entity:
+      name: Heating Device
+      description: >
+        The climate entity to control. On Tado and similar systems, one device
+        is enough — the rest of the system follows automatically.
+      selector:
+        entity:
+          domain: climate
+
+    away_preset:
+      name: Away Preset
+      description: >
+        Preset name for Away Mode. Must be supported by your thermostat.
+        Typical values: "away".
+      default: "away"
+      selector:
+        text: {}
+
+    home_preset:
+      name: Home Preset
+      description: >
+        Preset name for Home Mode. Must be supported by your thermostat.
+        Typical values: "home", "auto", or "comfort".
+      default: "home"
+      selector:
+        text: {}
+
+mode: restart
+
+trigger:
+  - platform: state
+    entity_id: zone.home
+
+variables:
+  persons_home: "{{ trigger.to_state.state | int(0) }}"
+
+action:
+  - choose:
+
+      - conditions:
+          - condition: template
+            value_template: "{{ persons_home == 0 }}"
+        sequence:
+          - action: climate.set_preset_mode
+            target:
+              entity_id: !input climate_entity
+            data:
+              preset_mode: !input away_preset
+
+      - conditions:
+          - condition: template
+            value_template: "{{ persons_home > 0 }}"
+        sequence:
+          - action: climate.set_preset_mode
+            target:
+              entity_id: !input climate_entity
+            data:
+              preset_mode: !input home_preset
